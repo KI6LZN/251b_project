@@ -7,7 +7,7 @@ clear;
 clc;
 
 %% Change this number to change the image sequence
-seq_num = '39031';
+seq_num = '40851';% '40792';
 
 %% Environmental Variables
 data_path = insertAfter('detrac/test_images/Insight-MVT_Annotation_Test/MVI_/', 'MVI_', seq_num);
@@ -20,48 +20,46 @@ Y = anno.gtInfo.Y;
 W = anno.gtInfo.W;
 H = anno.gtInfo.H;
 
-numDet = size(X,2);
-
-%% Setup file names
-dirOutput = dir(fullfile(data_path,'img*.jpg'));
-fileNames = {dirOutput.name}.';
-numFrames = numel(fileNames);
-
 %% Read images into MATLAB
-I = imread(fullfile(data_path, fileNames{1}));
-sequence = zeros([size(I) numFrames],class(I));
-sequence(:,:,:,1) = I;
+imds = imageDatastore(fullfile(data_path),'FileExtensions','.jpg');
+sequence = readall(imds);
+I = sequence{1};
+num_frames = length(sequence);
+num_detections = size(X,2);
 
-%for all detections, if there is a bounding box for the first frame frame
-for j = 1:numDet
-    if X(1,j) ~= 0
-        w = W(1,j);
-        h = H(1,j);
-        x = X(1,j) - floor(w/2);
-        y = Y(1,j) - h;
-        sequence(:,:,:,1) = insertShape(sequence(:,:,:,1), 'Rectangle', [x y w h]);
+%% Read in ground truth values
+% gnd_truth is a 3-D matrix of bounding boxes
+% each k is each frame, and all rows are individual bounding boxes
+gnd_truth_bbox = zeros(num_detections,4,num_frames);
+gnd_truth_centroid = zeros(num_detections,2,num_frames);
+for k = 1:num_frames
+    for j = 1:num_detections
+        w = W(k,j);
+        h = H(k,j);
+        x = X(k,j);
+        y = Y(k,j);
+        gnd_truth_centroid(j,:,k) = [x,y];
+        x = x - floor(w/2);
+        y = y - h;
+        gnd_truth_bbox(j, :, k) = [x,y,w,h];
     end
 end
 
-%for all frames
-for p = 2:numFrames
-    sequence(:,:,:,p) = imread(fullfile(data_path, fileNames{p}));
-    
-    %for all detections, if there is a bounding box for this frame
-    for j = 1:numDet
-        if X(p,j) ~= 0
-            w = W(p,j);
-            h = H(p,j);
-            x = X(p,j) - floor(w/2);
-            y = Y(p,j) - h;
-            
-            sequence(:,:,:,p) = insertShape(sequence(:,:,:,p), 'Rectangle', [x y w h]);
-        end
-    end
-end
+%bbox labels
+labels = (1:num_detections).';
+labels = cellstr(num2str(labels));
 
+% output variable
+seq = zeros([size(I) num_frames],class(I));
+
+%% Insert bounding boxes
+for p = 1:num_frames    
+    seq(:,:,:,p) = insertObjectAnnotation(sequence{p}, ...
+        'Rectangle', gnd_truth_bbox(:,:,p), labels);
+end
+   
 %% Play images as a video
-m1 = implay(sequence);
-[width, height] = size(I);
-set(findall(0,'tag','spcui_scope_framework'),'position',[150 150 width+250 height/6]);
+m1 = implay(seq);
+[height, width, ~] = size(I);
+set(findall(0,'tag','spcui_scope_framework'),'position',[150 150 width-100 height-50]);
 play(m1.DataSource.Controls);
