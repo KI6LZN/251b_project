@@ -1,0 +1,420 @@
+% Track a single vehicle across the frames with a choice of filters, 
+% each with the "Constant Turn" motion model
+
+% Note that the Kalman filter will still use the "Constant Velocity" motion
+% model
+
+% Portions of the code are modified versions of MATLAB's 
+% "MotionBasedMultiObjectTrackingExample" code, available:
+% https://www.mathworks.com/help/vision/ug/motion-based-multiple-object-tracking.html
+
+%%%%%%
+% So Far:
+% Create bounding boxes on vehicles
+% Implement Kalman, UKF, and PF with default settings
+% Assign vehicles to tracks and follow their motion
+
+% Next:
+% Implement RLS with default settings
+% Perform Parameter Tuning on all filters
+% Repeat parameter tuning on another image set
+
+
+function track_single_const_turn
+    %% Prepare workspace
+    close all;
+    close(findall(0,'type','figure'));
+    clear;
+    clc;
+    figureCounter = 1;
+
+    %% Select which filter to use
+    valid_filt_names = ["Kalman", "UKF", "PF", "RLS"];
+    filt_name = valid_filt_names(2);
+   
+    %% Select which track to follow
+    track_number = 21;
+    num_detections = 1;
+
+    %% Change this number to change the image sequence
+    seq_num = '40851'; %'39031'; %'40851'; %'40701';
+
+    %% Environmental Variables
+    data_path = insertAfter('detrac/test_images/Insight-MVT_Annotation_Test/MVI_/', 'MVI_', seq_num);
+    gndtruth_path = 'detrac/annotations/DETRAC-Test-Annotations-MAT/';
+    
+    %% Read in ground truth values
+    anno = open(fullfile(gndtruth_path, insertAfter('MVI_.mat', 'MVI_', seq_num)));
+    X = anno.gtInfo.X;
+    Y = anno.gtInfo.Y;
+    W = anno.gtInfo.W;
+    H = anno.gtInfo.H;
+
+    %% Read images into MATLAB
+    imds = imageDatastore(fullfile(data_path),'FileExtensions','.jpg');
+    sequence = readall(imds);
+    num_frames = length(sequence);
+    I = sequence{1};
+    
+    %% Prepare ground truth bounding boxes
+    % gnd_truth is a 3-D matrix of bounding boxes
+    % each k is each frame, and all rows are individual bounding boxes
+    gnd_truth_bbox = zeros(num_detections,4,num_frames);
+    gnd_truth_centroid = zeros(num_detections,2,num_frames);
+    for k = 1:num_frames
+%         for j = 17:num_detections
+            w = W(k,track_number);
+            h = H(k,track_number);
+            x = X(k,track_number);
+            y = Y(k,track_number);
+            gnd_truth_centroid(1,:,k) = [x,y];
+            x = x - w/2;%floor(w/2);
+            y = y - h;
+            gnd_truth_bbox(1, :, k) = [x,y,w,h];
+%         end
+    end
+    
+    
+    
+    %% Detect and track vehicle
+    centroid_log = [];
+    pair_log = {};
+    dist_log = {};
+    mean_dist = zeros(num_frames,1);
+    tracks = initializeTracks;
+    nextId = 1; % ID of the next track
+    for p = 1:num_frames
+        frame_cents = [];
+
+        % load ground truth values for this frame
+        bbox = gnd_truth_bbox(:,:,p);
+        centroids = gnd_truth_centroid(:,:,p);
+        
+        % generate a log variable with the track number and centroid
+        % location for each ground truth centroid in each frame
+        cent_with_track = [];
+        for j = 1:size(centroids,1)
+            if ~(centroids(j,1) == 0 && centroids(j,2) == 0)
+                cent_with_track = [cent_with_track; j centroids(j,1) centroids(j,2)];
+            end
+        end
+        
+        % generate a log variable with the track number and centroid
+        % location for each predicted centroid in each frame
+        tracks = predictNewLocationsOfTracks(tracks, filt_name);
+        for j = 1:length(tracks)
+            filt = getfield(tracks(j), filt_name);
+            st = filt.State;
+            frame_cents = [frame_cents; tracks(j).id st(1) st(3)];
+        end
+        centroid_log = [centroid_log; repmat(p,size(frame_cents,1), 1) frame_cents ];
+        
+        % update track assignments and remove tracks that have disappeared
+        [assignments, unassignedTracks, unassignedDetections] = ...
+            detectionToTrackAssignment(tracks, centroids, filt_name);
+        tracks = updateAssignedTracks(tracks, assignments, centroids, bbox, filt_name);
+        tracks = updateUnassignedTracks(tracks, unassignedTracks);
+        tracks = deleteLostTracks(tracks);
+        [tracks, nextId] = createNewTracks(tracks, centroids, ...
+            bbox, unassignedDetections, nextId);
+        
+        
+        
+%         for j = 1:length(tracks)
+%             filt = getfield(tracks(j), filt_name);
+%             st = filt.State;
+%             frame_cents = [frame_cents; tracks(j).id st(1) st(3)];
+%         end
+%         centroid_log = [centroid_log; repmat(p,size(frame_cents,1), 1) frame_cents ];
+        
+%         labels = cellstr(num2str((1:size(bbox,1)).'));% cellstr(int2str(ids'));
+        
+        %% prepare bboxes and track number labels
+        labels = [];
+        bboxes = [];
+        for i = 1:length(tracks)
+            if tracks(i).totalVisibleCount >= 8
+               bboxes = [bboxes; tracks(i).bbox];
+               labels = [labels; tracks(i).id];
+            end
+            
+        end
+        
+        %% add bboxes
+        labels = cellstr(num2str(labels));
+        if size(bboxes,1) >= 1
+            sequence_filt(:,:,:,p) = insertObjectAnnotation(sequence{p}, ...
+                'Rectangle', bboxes, labels);
+        else
+           sequence_filt(:,:,:,p) = sequence{p}; 
+        end
+        
+        %% logging and comparison
+        [pairs, dist] = associate_tracks(cent_with_track, frame_cents);
+        dist_log{p} = dist;
+        pair_log{p} = pairs;
+        mean_dist(p) = mean(dist);
+    end
+    
+    %% Plot average error
+    figure(figureCounter)
+    figureCounter = figureCounter + 1;
+    plot(mean_dist)
+    title_str = strcat("Centroid Error in Pixels, Constant Turn: ", filt_name);
+    sub_str = strcat("Seq. ", num2str(seq_num), ", Track ", num2str(track_number));
+    title(title_str, sub_str)
+    ylabel("Pixels")
+    xlabel("Frame")   
+    
+    %% Play back images with detected bounding boxes
+    m1 = implay(sequence_filt);
+    [height, width, ~] = size(I);
+    set(findall(0,'tag','spcui_scope_framework'),'position',[150 150 width-100 height-50]);
+    play(m1.DataSource.Controls);
+    
+    mean(mean_dist(mean_dist ~=0 & ~isnan(mean_dist)))
+
+end
+
+
+%% track structure, modified from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function tracks = initializeTracks()
+    % create an empty array of tracks
+    tracks = struct(...
+        'id', {}, ...
+        'bbox', {}, ...
+        'Kalman', {}, ...
+        'UKF', {}, ...
+        'PF', {}, ...
+        'RLS', {}, ...
+        'age', {}, ...
+        'totalVisibleCount', {}, ...
+        'consecutiveInvisibleCount', {});
+end
+
+%% associate track numbers with currently visible centroids
+%pairs is a column vector where the row number is the track number of the
+%true centroid, and the value is the track number of the frame centroid
+function [pairs, dist] = associate_tracks(true_cent, frame_cents)
+    
+    if isempty(frame_cents) || isempty(true_cent)
+        pairs = [];
+        dist = 0;
+        return;
+    end
+        
+    n_true = size(true_cent,1);
+    nDetections = size(frame_cents,1);
+    cost = zeros(n_true, nDetections);
+    
+    frame_cent = frame_cents(:,[2 3]);
+    gnd_cent = true_cent(:,[2 3]);
+    
+    %for all ground truth tracks
+    for iter = 1:n_true
+        true_val = repmat(gnd_cent(iter,:), nDetections);
+        cost(iter,:) = euclidean_distance(true_val, frame_cent).';
+    end
+    
+    % Solve the assignment problem.
+    costOfNonAssignment = 20;
+    [pairs, unassignedTracks, unassignedDetections] = ...
+        assignDetectionsToTracks(cost, costOfNonAssignment);
+    
+    idx = sub2ind(size(cost), pairs(:,1), pairs(:,2));
+    dist = cost(idx);
+    
+    if isempty(idx)
+        dist = 0;
+        return;
+    end
+    
+    for iter = 1:size(pairs,1)
+       pairs(iter, 1) = true_cent(iter,1);
+       int_track = pairs(iter, 2);
+       pairs(iter, 2) = frame_cents(int_track,1);
+    end
+end
+
+%% Calculate Euclidean distance between two (x,y) column vectors
+function dist = euclidean_distance(A, B)
+    dist = sqrt((A(:,1)-B(:,1)).^2 + (A(:,2)-B(:,2)).^2 );
+end
+
+%% Modified version of function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function tracks = predictNewLocationsOfTracks(tracks, filt_name)
+    for i = 1:length(tracks)
+        % Predict the current location of the track.
+        bbox = tracks(i).bbox;
+        if filt_name == "Kalman"
+            predictedCentroid = predict(tracks(i).Kalman);
+        elseif filt_name == "UKF"
+            [predictedCentroid, ~] = predict(tracks(i).UKF);
+            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
+        elseif filt_name == "PF"
+            [predictedCentroid, ~] = predict(tracks(i).PF);
+            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
+        elseif filt_name == "RLS"
+            
+        end       
+        
+
+        % Shift the bounding box so that its center is at 
+        % the predicted location.
+        predictedCentroid = int32(predictedCentroid) - int32(bbox(3:4)) / 2;
+        tracks(i).bbox = [predictedCentroid, bbox(3:4)];
+    end
+end
+
+%% Modified version of function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function [assignments, unassignedTracks, unassignedDetections] = ...
+        detectionToTrackAssignment(tracks, centroids, filt_name)
+
+    nTracks = length(tracks);
+    nDetections = size(centroids, 1);
+
+    % Compute the cost of assigning each detection to each track.
+    cost = zeros(nTracks, nDetections);
+    for i = 1:nTracks
+        if filt_name == "Kalman"
+            cost(i, :) = distance(tracks(i).Kalman, centroids);
+        elseif filt_name == "UKF"
+            meas = [centroids, zeros(size(centroids,1),1)];
+            if ~isempty(meas)
+                cost(i, :) = distance(tracks(i).UKF, meas);
+            else
+                cost(i, :) = zeros(1, size(centroids,1));
+            end
+        elseif filt_name == "PF"
+            meas = [centroids, zeros(size(centroids,1),1)];
+            if ~isempty(meas)
+                cost(i, :) = distance(tracks(i).PF, meas);
+            else
+                cost(i, :) = zeros(1, size(centroids,1));
+            end
+        elseif filt_name == "RLS"
+        end
+    end
+
+    % Solve the assignment problem.
+    costOfNonAssignment = 20;
+    [assignments, unassignedTracks, unassignedDetections] = ...
+        assignDetectionsToTracks(cost, costOfNonAssignment);
+    
+end
+
+%% Modified version of function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function tracks = updateAssignedTracks(tracks, assignments, centroids, bboxes, filt_name)
+    numAssignedTracks = size(assignments, 1);
+    for i = 1:numAssignedTracks
+        trackIdx = assignments(i, 1);
+        detectionIdx = assignments(i, 2);
+        centroid = centroids(detectionIdx, :);
+        bbox = bboxes(detectionIdx, :);
+
+        % Correct the estimate of the object's location
+        % using the new detection.
+        if filt_name == "Kalman"
+            correct(tracks(trackIdx).Kalman, centroid);
+        elseif filt_name == "UKF"
+            centroid = [centroid, 0];
+            correct(tracks(trackIdx).UKF, centroid);
+        elseif filt_name == "PF"
+            centroid = [centroid, 0];
+            correct(tracks(trackIdx).PF, centroid);
+        elseif filt_name == "RLS"
+        end
+
+        % Replace predicted bounding box with detected
+        % bounding box.
+        tracks(trackIdx).bbox = bbox;
+
+        % Update track's age.
+        tracks(trackIdx).age = tracks(trackIdx).age + 1;
+
+        % Update visibility.
+        tracks(trackIdx).totalVisibleCount = ...
+            tracks(trackIdx).totalVisibleCount + 1;
+        tracks(trackIdx).consecutiveInvisibleCount = 0;
+    end
+end
+
+%% Function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function tracks = updateUnassignedTracks(tracks, unassignedTracks)
+    for i = 1:length(unassignedTracks)
+        ind = unassignedTracks(i);
+        tracks(ind).age = tracks(ind).age + 1;
+        tracks(ind).consecutiveInvisibleCount = ...
+            tracks(ind).consecutiveInvisibleCount + 1;
+    end
+end
+
+%% Function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function tracks = deleteLostTracks(tracks)
+    if isempty(tracks)
+        return;
+    end
+
+    invisibleForTooLong = 10;
+    ageThreshold = 8;
+
+    % Compute the fraction of the track's age for which it was visible.
+    ages = [tracks(:).age];
+    totalVisibleCounts = [tracks(:).totalVisibleCount];
+    visibility = totalVisibleCounts ./ ages;
+
+    % Find the indices of 'lost' tracks.
+    lostInds = (ages < ageThreshold & visibility < 0.6) | ...
+        [tracks(:).consecutiveInvisibleCount] >= invisibleForTooLong;
+
+    % Delete lost tracks.
+    tracks = tracks(~lostInds);
+end
+
+%% Modified version of function from MATLAB's "MotionBasedMultiObjectTrackingExample"
+function [tracks, nextId] = createNewTracks(tracks, centroids, ...
+    bboxes, unassignedDetections, nextId)
+    centroids = centroids(unassignedDetections, :);
+    bboxes = bboxes(unassignedDetections, :);
+
+    for i = 1:size(centroids, 1)
+
+        centroid = centroids(i,:);
+        bbox = bboxes(i, :);
+
+        % Create a Kalman filter object.
+        kalmanFilter = configureKalmanFilter('ConstantVelocity', ...
+            centroid, [0.7826, 1], [0.7826, 1], 0.7826);
+        
+        % Create an Unscented Kalman Filter object
+        cov = eye(5);
+        cov(1,1) = 0.7826;
+        cov(3,3) = 0.7826;
+        meas = 0.7826;
+        ukf = trackingUKF(@constturn,@ctmeas,[centroid(1);0;centroid(2);0;-0.25],...
+            'StateCovariance', cov, 'ProcessNoise', cov, ...
+            'MeasurementNoise', meas, 'Alpha', 1e-3);
+        
+        % Create a Particle Filter object
+        pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0], ...
+            'NumParticles',2500);
+
+        % Create a new track.
+        newTrack = struct(...
+            'id', nextId, ...
+            'bbox', bbox, ...
+            'Kalman', kalmanFilter, ...
+            'UKF', ukf, ...
+            'PF', pf, ...
+            'RLS', 1, ...
+            'age', 1, ...
+            'totalVisibleCount', 1, ...
+            'consecutiveInvisibleCount', 0);
+
+        % Add it to the array of tracks.
+        tracks(end + 1) = newTrack;
+
+        % Increment the next id.
+        nextId = nextId + 1;
+    end
+end
