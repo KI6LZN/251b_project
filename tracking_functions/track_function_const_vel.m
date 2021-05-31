@@ -375,10 +375,10 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
 
         % Create a Kalman filter object.
         kalmanFilter = configureKalmanFilter('ConstantVelocity', ...
-            centroid, [0.7826, 1], [0.7826, 1], 0.7826);
+            centroid, [0.7826, 0.75], [0.7826, 0.75], 0.7826);
         
         % Create an Unscented Kalman Filter object
-        cov = eye(4);
+        cov = 0.75.*eye(4);
         cov(1,1) = 0.7826;
         cov(3,3) = 0.7826;
         meas = 0.7826;

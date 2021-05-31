@@ -53,7 +53,6 @@ function track_single_const_vel
     sequence = readall(imds);
     num_frames = length(sequence);
     I = sequence{1};
-    [height, width, ~] = size(I);    
     
     %% Prepare ground truth bounding boxes
     % gnd_truth is a 3-D matrix of bounding boxes
@@ -383,10 +382,16 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
 
         % Create a Kalman filter object.
         kalmanFilter = configureKalmanFilter('ConstantVelocity', ...
-            centroid, [0.7826, 1], [0.7826, 1], 0.7826);
+            centroid, [0.7826, 0.75], [0.7826, 0.75], 0.7826);
         
         % Create an Unscented Kalman Filter object
-        ukf = trackingUKF(@constvel,@cvmeas,[centroid(1);-.1;centroid(2);.1]);
+        cov = 0.75.*eye(4);
+        cov(1,1) = 0.7826;
+        cov(3,3) = 0.7826;
+        meas = 0.7826;
+        ukf = trackingUKF(@constvel,@cvmeas,[centroid(1);-.1;centroid(2);.1],...
+            'StateCovariance', cov, 'ProcessNoise', cov, ...
+            'MeasurementNoise', meas, 'Alpha', 1e-2);
         
         % Create a Particle Filter object
         pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0], ...
