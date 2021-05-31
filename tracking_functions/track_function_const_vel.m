@@ -1,25 +1,9 @@
 % Track all vehicles across the frames with a choice of filters, each with
 % the "Constant Velocity" motion model
 
-
 % Portions of the code are modified versions of MATLAB's 
 % "MotionBasedMultiObjectTrackingExample" code, available:
 % https://www.mathworks.com/help/vision/ug/motion-based-multiple-object-tracking.html
-
-
-
-%%%%%%
-% So Far:
-% Create bounding boxes on vehicles
-% Implement Kalman, UKF, and PF with default settings
-% Assign vehicles to tracks and follow their motion
-
-% Next:
-% Implement RLS with default settings
-% Perform Parameter Tuning on all filters
-% Repeat parameter tuning on another image set
-
-
 
 function track_function_const_vel
     %% Prepare workspace
@@ -31,7 +15,7 @@ function track_function_const_vel
     
     %% Select which filter to use
     valid_filt_names = ["Kalman", "UKF", "PF", "RLS"];
-    filt_name = valid_filt_names(1);
+    filt_name = valid_filt_names(2);
 
     %% Change this number to change the image sequence
     seq_num = '40851'; %'40701'; %'39031'; %'40851';
@@ -152,6 +136,11 @@ function track_function_const_vel
         pair_log{p} = pairs;
         mean_dist(p) = mean(dist);
     end
+    
+    TF = isnan( mean_dist ); 
+    min_dist = min(mean_dist(mean_dist>0))
+    max_dist = max(mean_dist)
+    omean_dist = mean(mean_dist(~TF))
     
     
     %% Plot average error
@@ -382,7 +371,7 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
         cov(1,1) = 0.7826;
         cov(3,3) = 0.7826;
         meas = 0.7826;
-        ukf = trackingUKF(@constvel,@cvmeas,[centroid(1);-.1;centroid(2);.1],...
+        ukf = trackingUKF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0],...
             'StateCovariance', cov, 'ProcessNoise', cov, ...
             'MeasurementNoise', meas, 'Alpha', 1e-2);
         
