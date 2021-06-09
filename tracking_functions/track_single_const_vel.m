@@ -5,19 +5,6 @@
 % "MotionBasedMultiObjectTrackingExample" code, available:
 % https://www.mathworks.com/help/vision/ug/motion-based-multiple-object-tracking.html
 
-%%%%%%
-% So Far:
-% Create bounding boxes on vehicles
-% Implement Kalman, UKF, and PF with default settings
-% Assign vehicles to tracks and follow their motion
-
-% Next:
-% Implement RLS with default settings
-% Perform Parameter Tuning on all filters
-% Repeat parameter tuning on another image set
-
-
-
 function track_single_const_vel
     %% Prepare workspace
     close all;
@@ -25,9 +12,11 @@ function track_single_const_vel
     clear;
     clc;
     figureCounter = 1;
+    
+    rng(3);
 
     %% Select which filter to use
-    valid_filt_names = ["Kalman", "UKF", "PF", "RLS"];
+    valid_filt_names = ["Kalman", "UKF", "PF"];
     filt_name = valid_filt_names(1);
    
     %% Select which track to follow
@@ -184,7 +173,6 @@ function tracks = initializeTracks()
         'Kalman', {}, ...
         'UKF', {}, ...
         'PF', {}, ...
-        'RLS', {}, ...
         'age', {}, ...
         'totalVisibleCount', {}, ...
         'consecutiveInvisibleCount', {});
@@ -251,9 +239,7 @@ function tracks = predictNewLocationsOfTracks(tracks, filt_name)
             predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
         elseif filt_name == "PF"
             [predictedCentroid, ~] = predict(tracks(i).PF);
-            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
-        elseif filt_name == "RLS"
-            
+            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];            
         end       
         
 
@@ -290,7 +276,6 @@ function [assignments, unassignedTracks, unassignedDetections] = ...
             else
                 cost(i, :) = zeros(1, size(centroids,1));
             end
-        elseif filt_name == "RLS"
         end
     end
 
@@ -320,7 +305,6 @@ function tracks = updateAssignedTracks(tracks, assignments, centroids, bboxes, f
         elseif filt_name == "PF"
             centroid = [centroid, 0];
             correct(tracks(trackIdx).PF, centroid);
-        elseif filt_name == "RLS"
         end
 
         % Replace predicted bounding box with detected
@@ -394,8 +378,20 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
             'MeasurementNoise', meas, 'Alpha', 1e-2);
         
         % Create a Particle Filter object
-        pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0], ...
-            'NumParticles',2500);
+        %best: 1, 3, 2.2, 2500: 1.0708 (KF 1.0579)
+        pos = 1; %0.7826;
+        vel = 3; %0.75;
+        cov = eye(4);
+        cov(1,1) = pos;
+        cov(2,2) = vel;
+        cov(3,3) = pos;
+        cov(4,4) = vel;
+        meas = 2.2;
+        num_particles = 2500;
+        pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0],...
+        'StateCovariance', cov, 'ProcessNoise', cov, ...
+        'MeasurementNoise', meas, 'NumParticles', num_particles, ...
+        'ResamplingMethod', 'Systematic');
 
         % Create a new track.
         newTrack = struct(...
@@ -404,7 +400,6 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
             'Kalman', kalmanFilter, ...
             'UKF', ukf, ...
             'PF', pf, ...
-            'RLS', 1, ...
             'age', 1, ...
             'totalVisibleCount', 1, ...
             'consecutiveInvisibleCount', 0);

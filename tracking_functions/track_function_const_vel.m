@@ -13,12 +13,14 @@ function track_function_const_vel
     clc;
     figureCounter = 1;
     
+    rng(3);
+    
     %% Select which filter to use
-    valid_filt_names = ["Kalman", "UKF", "PF", "RLS"];
+    valid_filt_names = ["Kalman", "UKF", "PF"];
     filt_name = valid_filt_names(2);
 
     %% Change this number to change the image sequence
-    seq_num = '40851'; %'40701'; %'39031'; %'40851';
+    seq_num = '39031'; %'40701'; %'39031'; %'40851';
 
     %% Environmental Variables
     data_path = insertAfter('detrac/test_images/Insight-MVT_Annotation_Test/MVI_/', 'MVI_', seq_num);
@@ -66,6 +68,7 @@ function track_function_const_vel
     mean_dist = zeros(num_frames,1);
     tracks = initializeTracks;
     nextId = 1; % ID of the next track
+    tic %timing
     for p = 1:num_frames
         frame_cents = [];
 
@@ -136,6 +139,7 @@ function track_function_const_vel
         pair_log{p} = pairs;
         mean_dist(p) = mean(dist);
     end
+    toc %timing
     
     TF = isnan( mean_dist ); 
     min_dist = min(mean_dist(mean_dist>0))
@@ -171,7 +175,6 @@ function tracks = initializeTracks()
         'Kalman', {}, ...
         'UKF', {}, ...
         'PF', {}, ...
-        'RLS', {}, ...
         'age', {}, ...
         'totalVisibleCount', {}, ...
         'consecutiveInvisibleCount', {});
@@ -233,9 +236,7 @@ function tracks = predictNewLocationsOfTracks(tracks, filt_name)
             predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
         elseif filt_name == "PF"
             [predictedCentroid, ~] = predict(tracks(i).PF);
-            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];
-        elseif filt_name == "RLS"
-            
+            predictedCentroid = [predictedCentroid(1), predictedCentroid(3)];            
         end       
         
 
@@ -272,7 +273,6 @@ function [assignments, unassignedTracks, unassignedDetections] = ...
             else
                 cost(i, :) = zeros(1, size(centroids,1));
             end
-        elseif filt_name == "RLS"
         end
     end
 
@@ -302,7 +302,6 @@ function tracks = updateAssignedTracks(tracks, assignments, centroids, bboxes, f
         elseif filt_name == "PF"
             centroid = [centroid, 0];
             correct(tracks(trackIdx).PF, centroid);
-        elseif filt_name == "RLS"
         end
 
         % Replace predicted bounding box with detected
@@ -363,21 +362,41 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
         bbox = bboxes(i, :);
 
         % Create a Kalman filter object.
+        %1.5 and 1.5 for 39031
+        %0.7826 and 0.75 for 40701
+        %0.7826 and 0.75 for 40851
         kalmanFilter = configureKalmanFilter('ConstantVelocity', ...
             centroid, [0.7826, 0.75], [0.7826, 0.75], 0.7826);
         
         % Create an Unscented Kalman Filter object
-        cov = 0.75.*eye(4);
-        cov(1,1) = 0.7826;
-        cov(3,3) = 0.7826;
+        %1.5 and 1.5 for 39031 %1.0696
+        %0.7826 and 0.75 for 40701
+        %0.7826 and 0.75 for 40851
+        cov = 1.5.*eye(4);
+%         cov(1,1) = 0.75;
+%         cov(3,3) = 0.75;
         meas = 0.7826;
         ukf = trackingUKF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0],...
             'StateCovariance', cov, 'ProcessNoise', cov, ...
             'MeasurementNoise', meas, 'Alpha', 1e-2);
         
         % Create a Particle Filter object
-        pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0], ...
-            'NumParticles',2500);
+        % 39031: 1, 4, 2.2, 10000: 1.0807 (1000: 1.1992)
+        % 40701: 1, 1.5, 2.2, 10000: 0.9186 (1000: 0.9940, 500: 0.9878)
+        % 40851: 1, 2, 2.2, 10000: 0.9530 (KF 0.9458)
+        pos = 1; %0.7826;
+        vel = 4; %0.75;
+        cov = eye(4);
+        cov(1,1) = pos;
+        cov(2,2) = vel;
+        cov(3,3) = pos;
+        cov(4,4) = vel;
+        meas = 2.2; % currently doing parameter tuning
+        num_particles = 10000;
+        pf = trackingPF(@constvel,@cvmeas,[centroid(1);0;centroid(2);0],...
+        'StateCovariance', cov, 'ProcessNoise', cov, ...
+        'MeasurementNoise', meas, 'NumParticles', num_particles, ...
+        'ResamplingMethod', 'Systematic');
 
         % Create a new track.
         newTrack = struct(...
@@ -386,7 +405,6 @@ function [tracks, nextId] = createNewTracks(tracks, centroids, ...
             'Kalman', kalmanFilter, ...
             'UKF', ukf, ...
             'PF', pf, ...
-            'RLS', 1, ...
             'age', 1, ...
             'totalVisibleCount', 1, ...
             'consecutiveInvisibleCount', 0);
